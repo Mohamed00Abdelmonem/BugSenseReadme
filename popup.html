@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Explain Error</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header class="hero">
+        <div>
+          <p class="eyebrow" data-i18n="eyebrow">Runtime watcher</p>
+          <h1 data-i18n="title">Explain Error</h1>
+          <p class="subtitle" data-i18n="subtitle">Catch page errors and translate them into plain English.</p>
+        </div>
+        <img class="app-icon" src="icon.png" alt="" />
+      </header>
+
+      <section class="toolbar" aria-label="Error controls">
+        <div class="stat-card">
+          <span id="errorCount" class="stat-number">0</span>
+          <span class="stat-label" data-i18n="captured">captured</span>
+        </div>
+        <button id="langBtn" class="ghost-btn" type="button">عربي</button>
+        <button id="themeBtn" class="ghost-btn" type="button" aria-pressed="false">Dark</button>
+        <button id="clearBtn" class="primary-btn" type="button" data-i18n="clear">Clear</button>
+      </section>
+
+      <p id="status" class="status" data-i18n="loading">Loading errors...</p>
+      <section id="errorsList" class="errors-list" aria-live="polite"></section>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
