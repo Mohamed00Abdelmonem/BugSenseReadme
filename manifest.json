@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Explain Error",
+  "name": "BugSense",
   "description": "Capture JavaScript runtime errors on pages and explain them in plain language.",
   "version": "1.0.3",
   "icons": {
@@ -18,7 +18,7 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "Explain Error",
+    "default_title": "BugSense",
     "default_icon": {
       "16": "icon.png",
       "32": "icon.png",
