@@ -1,4 +1,4 @@
-importScripts("ai.js");
+importScripts("config.js", "ai.js");
 
 const MAX_ERRORS = 20;
 const DEDUPE_TTL_MS = 1500;

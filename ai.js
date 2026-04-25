@@ -1,4 +1,9 @@
-const GEMINI_API_KEY = "AIzaSyAWVVdHb7T2YRzYCTqibndBcLSf2-9GkKU";
+const configuredGeminiApiKey =
+  typeof GEMINI_API_KEY === "string"
+    ? GEMINI_API_KEY
+    : typeof API_KEY === "string"
+    ? API_KEY
+    : "";
 const GEMINI_MODEL = "gemini-2.5-flash";
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
@@ -232,7 +237,7 @@ async function explainJavaScriptError(errorInput) {
     return pendingExplanationRequests.get(cacheKey);
   }
 
-  if (!GEMINI_API_KEY || GEMINI_API_KEY === "PASTE_YOUR_GEMINI_API_KEY_HERE") {
+  if (!configuredGeminiApiKey || configuredGeminiApiKey === "PUT_YOUR_KEY_HERE") {
     const fallback = getFallbackExplanation(error);
     geminiExplanationCache.set(cacheKey, fallback);
     return fallback;
@@ -242,7 +247,7 @@ async function explainJavaScriptError(errorInput) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-goog-api-key": GEMINI_API_KEY
+        "x-goog-api-key": configuredGeminiApiKey
       },
       body: JSON.stringify({
         contents: [
