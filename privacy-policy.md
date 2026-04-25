@@ -2,6 +2,7 @@
 
 BugSense respects your privacy.
 
+The extension only reads JavaScript errors and does not track or store user data
 ## 🔒 Data Collection
 
 BugSense does NOT collect, store, or share any personal data.
