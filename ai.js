@@ -4,6 +4,7 @@ const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models
 
 const MIN_EXPLANATION_LENGTH = 60;
 const geminiExplanationCache = new Map();
+const pendingExplanationRequests = new Map();
 const BAD_RESPONSE_PHRASES = [
   "not in the common list",
   "common list",
@@ -23,13 +24,39 @@ function normalizeErrorInput(errorInput) {
 }
 
 function getErrorSignature(error) {
-  return [
-    error?.type || "",
-    error?.message || "",
-    error?.source || "",
-    error?.line ?? "",
-    error?.column ?? ""
-  ].join("|");
+  const stack = String(error?.stack || "").trim();
+  const message = String(error?.message || "").trim();
+  const type = String(error?.type || "").trim();
+
+  if (stack) {
+    return `stack:${stack}`;
+  }
+
+  return `message:${type}:${message}`;
+}
+
+function detectErrorKind(error) {
+  const message = String(error?.message || "").toLowerCase();
+  const type = String(error?.type || "").toLowerCase();
+
+  if (type.includes("resource") || message.includes("failed to load") || message.includes("network")) {
+    return "network/resource";
+  }
+
+  if (message.includes("referenceerror") || message.includes("is not defined")) {
+    return "reference";
+  }
+
+  if (
+    message.includes("typeerror") ||
+    message.includes("cannot read properties of undefined") ||
+    message.includes("cannot read properties of null") ||
+    message.includes("is not a function")
+  ) {
+    return "type";
+  }
+
+  return "runtime";
 }
 
 function getDynamicHints(error) {
@@ -37,12 +64,15 @@ function getDynamicHints(error) {
   const type = String(error?.type || "").toLowerCase();
   const hints = [];
 
-  if (message.includes("cannot read properties of undefined") || message.includes("cannot read property")) {
-    hints.push("The code probably tried to read a property from a value that is undefined.");
-  }
-
   if (message.includes("cannot read properties of null") || (message.includes("cannot read property") && message.includes("null"))) {
     hints.push("The code probably expected an object, but the value was null.");
+  }
+
+  if (
+    message.includes("cannot read properties of undefined") ||
+    (message.includes("cannot read property") && !message.includes("null"))
+  ) {
+    hints.push("The code probably tried to read a property from a value that is undefined.");
   }
 
   if (message.includes("is not defined")) {
@@ -74,12 +104,12 @@ function getFallbackExplanation(errorInput) {
   const normalized = message.toLowerCase();
   const type = String(error.type || "").toLowerCase();
 
-  if (normalized.includes("cannot read properties of undefined") || normalized.includes("cannot read property")) {
-    return `Cause:\nYour code is trying to read a property from a value that is undefined.\n\nFix:\nCheck that the object exists before using its property, or use optional chaining/default values.\n\nExample:\nconst user = data?.user;\nconsole.log(user?.name || "No name");`;
-  }
-
   if (normalized.includes("cannot read properties of null")) {
     return `Cause:\nYour code expected an object, but the value was null.\n\nFix:\nCheck for null before reading properties or attaching events.\n\nExample:\nconst button = document.querySelector("#save");\nif (button) {\n  button.addEventListener("click", saveData);\n}`;
+  }
+
+  if (normalized.includes("cannot read properties of undefined") || normalized.includes("cannot read property")) {
+    return `Cause:\nYour code is trying to read a property from a value that is undefined.\n\nFix:\nCheck that the object exists before using its property, or use optional chaining/default values.\n\nExample:\nconst user = data?.user;\nconsole.log(user?.name || "No name");`;
   }
 
   if (normalized.includes("is not defined")) {
@@ -110,6 +140,7 @@ function buildPrompt(error) {
   const type = String(error.type || "runtime").trim();
   const stack = String(error.stack || "No stack trace available").trim();
   const hints = getDynamicHints(error);
+  const errorKind = detectErrorKind(error);
 
   return `
 You are an expert JavaScript tutor helping a beginner fix a real browser error.
@@ -121,7 +152,7 @@ Your task:
 - NEVER say there is not enough information.
 - ALWAYS explain the most likely real cause.
 - ALWAYS provide a practical fix.
-- ALWAYS include a small code example, or write exactly "No code example needed."
+- ALWAYS include a small code example directly related to the error kind, or write exactly "No code example needed."
 
 Format your answer exactly like this:
 
@@ -132,7 +163,7 @@ Fix:
 1-3 short beginner-friendly sentences explaining how to solve it.
 
 Example:
-A tiny JavaScript example that shows the fix, or "No code example needed."
+A tiny JavaScript example that matches the error kind, or "No code example needed."
 
 Quality rules:
 - Use very simple English.
@@ -142,12 +173,18 @@ Quality rules:
 - Do not use bullet lists.
 - Do not repeat the full stack trace.
 - Do not leave any section empty.
+- If the error kind is network/resource, use a network, URL, script, image, or fetch example.
+- If the error kind is reference, use a missing variable, missing import, or load-order example.
+- If the error kind is type, use a null, undefined, object property, or function-call example.
 
 Error message:
 ${message}
 
 Error type:
 ${type}
+
+Detected error kind:
+${errorKind}
 
 Helpful hints:
 ${hints}
@@ -191,15 +228,17 @@ async function explainJavaScriptError(errorInput) {
     return geminiExplanationCache.get(cacheKey);
   }
 
+  if (pendingExplanationRequests.has(cacheKey)) {
+    return pendingExplanationRequests.get(cacheKey);
+  }
+
   if (!GEMINI_API_KEY || GEMINI_API_KEY === "PASTE_YOUR_GEMINI_API_KEY_HERE") {
     const fallback = getFallbackExplanation(error);
     geminiExplanationCache.set(cacheKey, fallback);
     return fallback;
   }
 
-  let response;
-  try {
-    response = await fetch(GEMINI_ENDPOINT, {
+  const request = fetch(GEMINI_ENDPOINT, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -219,35 +258,33 @@ async function explainJavaScriptError(errorInput) {
           maxOutputTokens: 700
         }
       })
+    })
+    .then(async (response) => {
+      if (!response.ok) {
+        return getFallbackExplanation(error);
+      }
+
+      let data;
+      try {
+        data = await response.json();
+      } catch (_) {
+        return getFallbackExplanation(error);
+      }
+
+      const explanation = cleanExplanation(data?.candidates?.[0]?.content?.parts?.[0]?.text);
+      return isUsableExplanation(explanation) ? explanation : getFallbackExplanation(error);
+    })
+    .catch(() => getFallbackExplanation(error))
+    .then((finalExplanation) => {
+      geminiExplanationCache.set(cacheKey, finalExplanation);
+      return finalExplanation;
+    })
+    .finally(() => {
+      pendingExplanationRequests.delete(cacheKey);
     });
-  } catch (_) {
-    const fallback = getFallbackExplanation(error);
-    geminiExplanationCache.set(cacheKey, fallback);
-    return fallback;
-  }
 
-  if (!response.ok) {
-    const fallback = getFallbackExplanation(error);
-    geminiExplanationCache.set(cacheKey, fallback);
-    return fallback;
-  }
-
-  let data;
-  try {
-    data = await response.json();
-  } catch (_) {
-    const fallback = getFallbackExplanation(error);
-    geminiExplanationCache.set(cacheKey, fallback);
-    return fallback;
-  }
-
-  const explanation = cleanExplanation(data?.candidates?.[0]?.content?.parts?.[0]?.text);
-  const finalExplanation = isUsableExplanation(explanation)
-    ? explanation
-    : getFallbackExplanation(error);
-
-  geminiExplanationCache.set(cacheKey, finalExplanation);
-  return finalExplanation;
+  pendingExplanationRequests.set(cacheKey, request);
+  return request;
 }
 
 globalThis.ExplainErrorAI = {

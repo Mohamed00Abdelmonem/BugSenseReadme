@@ -179,6 +179,8 @@ button:hover {
 }
 
 .error-card {
+  --kind: var(--danger);
+  --kind-bg: var(--danger-bg);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 20px;
@@ -194,8 +196,28 @@ button:hover {
   position: absolute;
   inset: 0 auto 0 0;
   width: 5px;
-  background: linear-gradient(var(--accent-2), var(--danger));
+  background: linear-gradient(var(--kind), var(--accent-2));
   content: "";
+}
+
+.error-kind-type {
+  --kind: #e05d3f;
+  --kind-bg: rgba(224, 93, 63, 0.12);
+}
+
+.error-kind-network {
+  --kind: #d9961a;
+  --kind-bg: rgba(217, 150, 26, 0.14);
+}
+
+.error-kind-reference {
+  --kind: #2878c7;
+  --kind-bg: rgba(40, 120, 199, 0.13);
+}
+
+.error-kind-runtime {
+  --kind: var(--accent);
+  --kind-bg: rgba(13, 124, 102, 0.12);
 }
 
 :root[dir="rtl"] .error-card::before {
@@ -214,10 +236,10 @@ button:hover {
   display: inline-flex;
   margin-bottom: 9px;
   padding: 4px 8px;
-  background: var(--danger-bg);
-  border: 1px solid rgba(224, 93, 63, 0.24);
+  background: var(--kind-bg);
+  border: 1px solid color-mix(in srgb, var(--kind), transparent 68%);
   border-radius: 999px;
-  color: var(--danger);
+  color: var(--kind);
   font-family: "Segoe UI", Tahoma, sans-serif;
   font-size: 10px;
   font-weight: 900;
@@ -242,12 +264,77 @@ button:hover {
 }
 
 .error-explanation {
+  max-height: none;
   margin: 0 0 8px;
   color: var(--muted);
   font-family: "Segoe UI", Tahoma, sans-serif;
   font-size: 13px;
   line-height: 1.45;
+  overflow: hidden;
   word-break: break-word;
+}
+
+.error-card.is-collapsible:not(.is-expanded) .error-explanation {
+  max-height: 190px;
+  mask-image: linear-gradient(#000 72%, transparent);
+}
+
+.explanation-section + .explanation-section {
+  margin-top: 10px;
+}
+
+.explanation-heading {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.explanation-body {
+  margin-top: 3px;
+}
+
+.example-code {
+  margin: 6px 0 0;
+  padding: 9px 10px;
+  overflow-x: auto;
+  background: rgba(16, 22, 20, 0.08);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--kind);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+:root[data-theme="dark"] .example-code {
+  background: rgba(246, 239, 226, 0.07);
+}
+
+.error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 10px 0 9px;
+}
+
+.tool-btn {
+  min-height: 30px;
+  padding: 0 10px;
+  background: var(--surface-strong);
+  color: var(--text);
+  font-size: 11px;
+}
+
+.tool-btn:hover {
+  border-color: color-mix(in srgb, var(--kind), transparent 55%);
+}
+
+.tool-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  transform: none;
 }
 
 .error-meta {

@@ -12,6 +12,7 @@ let currentErrors = [];
 let renderRunId = 0;
 
 const aiExplanationCache = new Map();
+const pendingAIRequests = new Map();
 const MIN_AI_EXPLANATION_LENGTH = 60;
 
 const translations = {
@@ -40,7 +41,7 @@ const translations = {
       undefinedProperty: "Code tried to access a property on undefined. Verify the object exists before reading its fields.",
       resourceFailed: "A resource failed to load. Check the file path, URL, or server response.",
       promise: "A promise failed without a catch handler. Add error handling with catch or try/catch.",
-      generic: "This error is not in the common list yet. Read the message and stack trace to locate the failing code path."
+      generic: "This error happened while JavaScript was running. Read the message and stack trace to locate the failing code path."
     }
   },
   ar: {
@@ -166,6 +167,52 @@ function translateExplanation(error) {
   return getLanguage() === "ar" ? explanations.generic : error.explanation || explanations.generic;
 }
 
+function detectErrorKind(error) {
+  const message = String(error?.message || "").toLowerCase();
+  const type = String(error?.type || "").toLowerCase();
+
+  if (type.includes("resource") || message.includes("failed to load") || message.includes("network")) {
+    return {
+      className: "error-kind-network",
+      icon: "!",
+      label: "Network"
+    };
+  }
+
+  if (message.includes("referenceerror") || message.includes("is not defined")) {
+    return {
+      className: "error-kind-reference",
+      icon: "#",
+      label: "Reference"
+    };
+  }
+
+  if (
+    message.includes("typeerror") ||
+    message.includes("cannot read properties of undefined") ||
+    message.includes("cannot read properties of null") ||
+    message.includes("is not a function")
+  ) {
+    return {
+      className: "error-kind-type",
+      icon: "!",
+      label: "TypeError"
+    };
+  }
+
+  return {
+    className: "error-kind-runtime",
+    icon: "JS",
+    label: "Runtime"
+  };
+}
+
+function getSectionText(explanation, sectionName) {
+  const sectionPattern = new RegExp(`${sectionName}:\\s*([\\s\\S]*?)(?=\\n\\s*(Cause|Fix|Example):|$)`, "i");
+  const match = String(explanation || "").match(sectionPattern);
+  return match ? match[1].trim() : "";
+}
+
 function renderTextWithLineBreaks(element, text) {
   element.textContent = "";
   String(text || "")
@@ -179,14 +226,62 @@ function renderTextWithLineBreaks(element, text) {
     });
 }
 
+function appendMultilineText(element, text) {
+  String(text || "")
+    .split("\n")
+    .forEach((line, index) => {
+      if (index > 0) {
+        element.appendChild(document.createElement("br"));
+      }
+
+      element.appendChild(document.createTextNode(line));
+    });
+}
+
+function renderExplanation(element, explanation) {
+  element.textContent = "";
+  const sectionNames = ["Cause", "Fix", "Example"];
+  const hasSections = sectionNames.every((name) => getSectionText(explanation, name));
+
+  if (!hasSections) {
+    renderTextWithLineBreaks(element, explanation);
+    return;
+  }
+
+  sectionNames.forEach((name) => {
+    const section = document.createElement("section");
+    section.className = `explanation-section explanation-${name.toLowerCase()}`;
+
+    const heading = document.createElement("div");
+    heading.className = "explanation-heading";
+    heading.textContent = `${name}:`;
+    section.appendChild(heading);
+
+    const bodyText = getSectionText(explanation, name);
+    if (name === "Example" && bodyText !== "No code example needed.") {
+      const pre = document.createElement("pre");
+      pre.className = "example-code";
+      const code = document.createElement("code");
+      code.textContent = bodyText;
+      pre.appendChild(code);
+      section.appendChild(pre);
+    } else {
+      const body = document.createElement("div");
+      body.className = "explanation-body";
+      appendMultilineText(body, bodyText);
+      section.appendChild(body);
+    }
+
+    element.appendChild(section);
+  });
+}
+
 function getErrorCacheKey(error) {
-  return [
-    error?.type || "",
-    error?.message || "",
-    error?.source || "",
-    error?.line ?? "",
-    error?.column ?? ""
-  ].join("|");
+  const stack = String(error?.stack || "").trim();
+  const message = String(error?.message || "").trim();
+  const type = String(error?.type || "").trim();
+
+  return stack ? `stack:${stack}` : `message:${type}:${message}`;
 }
 
 function sendMessageAsync(message) {
@@ -208,28 +303,42 @@ async function getAIExplanation(error) {
     return aiExplanationCache.get(cacheKey);
   }
 
-  const response = await sendMessageAsync({
-    type: "EXPLAIN_ERROR_WITH_GEMINI",
-    error
-  });
-
-  const explanation = String(response?.explanation || "").trim();
-  const hasRequiredSections =
-    explanation.includes("Cause:") &&
-    explanation.includes("Fix:") &&
-    explanation.includes("Example:");
-
-  if (!response || !response.ok || explanation.length < MIN_AI_EXPLANATION_LENGTH || !hasRequiredSections) {
-    throw new Error(response?.error || "AI explanation failed.");
+  if (pendingAIRequests.has(cacheKey)) {
+    return pendingAIRequests.get(cacheKey);
   }
 
-  aiExplanationCache.set(cacheKey, explanation);
-  return explanation;
+  const request = sendMessageAsync({
+    type: "EXPLAIN_ERROR_WITH_GEMINI",
+    error
+  })
+    .then((response) => {
+      const explanation = String(response?.explanation || "").trim();
+      const hasRequiredSections =
+        explanation.includes("Cause:") &&
+        explanation.includes("Fix:") &&
+        explanation.includes("Example:");
+
+      if (!response || !response.ok || explanation.length < MIN_AI_EXPLANATION_LENGTH || !hasRequiredSections) {
+        throw new Error(response?.error || "AI explanation failed.");
+      }
+
+      aiExplanationCache.set(cacheKey, explanation);
+      return explanation;
+    })
+    .finally(() => {
+      pendingAIRequests.delete(cacheKey);
+    });
+
+  pendingAIRequests.set(cacheKey, request);
+  return request;
 }
 
-async function updateCardWithAI(error, explanationEl, runId) {
+async function updateCardWithAI(renderedError, runId) {
+  const { error, explanationEl, copyFixBtn, toggleBtn } = renderedError;
   if (getLanguage() !== "en") {
-    renderTextWithLineBreaks(explanationEl, translateExplanation(error));
+    const fallback = translateExplanation(error);
+    renderExplanation(explanationEl, fallback);
+    syncCardActions(renderedError, fallback);
     return;
   }
 
@@ -237,43 +346,100 @@ async function updateCardWithAI(error, explanationEl, runId) {
   const cacheKey = getErrorCacheKey(error);
 
   if (aiExplanationCache.has(cacheKey)) {
-    renderTextWithLineBreaks(explanationEl, aiExplanationCache.get(cacheKey));
+    const cached = aiExplanationCache.get(cacheKey);
+    renderExplanation(explanationEl, cached);
+    syncCardActions(renderedError, cached);
     return;
   }
 
+  copyFixBtn.disabled = true;
+  toggleBtn.hidden = true;
   renderTextWithLineBreaks(explanationEl, "Explaining with AI...");
 
   try {
     const aiExplanation = await getAIExplanation(error);
     if (runId === renderRunId) {
-      renderTextWithLineBreaks(explanationEl, aiExplanation);
+      renderExplanation(explanationEl, aiExplanation);
+      syncCardActions(renderedError, aiExplanation);
     }
   } catch (_) {
     if (runId === renderRunId) {
-      renderTextWithLineBreaks(explanationEl, fallbackExplanation);
+      renderExplanation(explanationEl, fallbackExplanation);
+      syncCardActions(renderedError, fallbackExplanation);
     }
   }
 }
 
+function syncCardActions(renderedError, explanation) {
+  const fixText = getSectionText(explanation, "Fix");
+  renderedError.copyFixBtn.disabled = !fixText;
+  renderedError.copyFixBtn.dataset.fix = fixText;
+
+  const shouldCollapse = String(explanation || "").length > 360;
+  renderedError.toggleBtn.hidden = !shouldCollapse;
+  renderedError.card.classList.toggle("is-collapsible", shouldCollapse);
+  renderedError.card.classList.toggle("is-expanded", !shouldCollapse);
+  renderedError.toggleBtn.textContent = shouldCollapse ? "Expand" : "Collapse";
+}
+
+async function copyFixText(button) {
+  const fix = button.dataset.fix || "";
+  if (!fix) {
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(fix);
+    button.textContent = "Copied";
+    setTimeout(() => {
+      button.textContent = "Copy Fix";
+    }, 1200);
+  } catch (_) {
+    button.textContent = "Copy failed";
+    setTimeout(() => {
+      button.textContent = "Copy Fix";
+    }, 1200);
+  }
+}
+
 function createErrorCard(error, index) {
+  const kind = detectErrorKind(error);
   const card = document.createElement("article");
-  card.className = "error-card";
+  card.className = `error-card ${kind.className}`;
 
   const badge = document.createElement("span");
   badge.className = "error-badge";
-  badge.textContent = error.type || "error";
+  badge.textContent = `${kind.icon} ${kind.label}`;
 
   const title = document.createElement("h2");
   title.className = "error-title";
   title.textContent = error.message || t("unknownError");
 
-  const explanation = document.createElement("p");
+  const explanation = document.createElement("div");
   explanation.className = "error-explanation";
-  renderTextWithLineBreaks(explanation, translateExplanation(error) || t("noExplanation"));
+  const initialExplanation = translateExplanation(error) || t("noExplanation");
+  renderExplanation(explanation, initialExplanation);
 
   const aiLabel = document.createElement("div");
   aiLabel.className = "ai-label";
   aiLabel.textContent = "\u{1F916} AI Explanation";
+
+  const actions = document.createElement("div");
+  actions.className = "error-actions";
+
+  const copyFixBtn = document.createElement("button");
+  copyFixBtn.className = "tool-btn copy-fix-btn";
+  copyFixBtn.type = "button";
+  copyFixBtn.textContent = "Copy Fix";
+
+  const toggleBtn = document.createElement("button");
+  toggleBtn.className = "tool-btn";
+  toggleBtn.type = "button";
+  toggleBtn.textContent = "Expand";
+  toggleBtn.hidden = true;
+
+  actions.appendChild(copyFixBtn);
+  actions.appendChild(toggleBtn);
 
   const meta = document.createElement("div");
   meta.className = "error-meta";
@@ -288,9 +454,19 @@ function createErrorCard(error, index) {
   card.appendChild(title);
   card.appendChild(aiLabel);
   card.appendChild(explanation);
+  card.appendChild(actions);
   card.appendChild(meta);
 
-  return { card, error, explanationEl: explanation };
+  const renderedError = { card, error, explanationEl: explanation, copyFixBtn, toggleBtn };
+  syncCardActions(renderedError, initialExplanation);
+
+  copyFixBtn.addEventListener("click", () => copyFixText(copyFixBtn));
+  toggleBtn.addEventListener("click", () => {
+    card.classList.toggle("is-expanded");
+    toggleBtn.textContent = card.classList.contains("is-expanded") ? "Collapse" : "Expand";
+  });
+
+  return renderedError;
 }
 
 async function processErrorsList(renderedErrors, runId) {
@@ -299,7 +475,7 @@ async function processErrorsList(renderedErrors, runId) {
       return;
     }
 
-    await updateCardWithAI(renderedError.error, renderedError.explanationEl, runId);
+    await updateCardWithAI(renderedError, runId);
   }
 }
 
